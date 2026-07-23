@@ -1,16 +1,22 @@
 # Firmware — ESP32 HUB75 panel renderer
 
 A minimal Arduino/PlatformIO firmware. Joins WiFi, advertises over mDNS, and
-renders 64x64 RGB565 frames POSTed to it. No Spotify logic lives here.
+renders 64x64 RGB888 frames POSTed to it. No Spotify logic lives here.
 
 ## HTTP API
 
-| Method | Path          | Body                                  | Effect                                              |
-| ------ | ------------- | ------------------------------------- | --------------------------------------------------- |
-| GET    | `/`           | —                                     | status / health text                                |
-| POST   | `/frame`      | 8192 bytes, RGB565 big-endian (64×64) | draw the frame                                      |
-| POST   | `/brightness` | ASCII integer `0`–`255`, or `auto`    | set panel brightness (manual), or return to the LDR |
-| POST   | `/clear`      | —                                     | blank the panel                                     |
+| Method | Path          | Body                                         | Effect                                              |
+| ------ | ------------- | -------------------------------------------- | --------------------------------------------------- |
+| GET    | `/`           | —                                            | status / health text                                |
+| POST   | `/frame`      | 12288 bytes, RGB888 (r,g,b per pixel, 64×64) | draw the frame                                      |
+| POST   | `/brightness` | ASCII integer `0`–`255`, or `auto`           | set panel brightness (manual), or return to the LDR |
+| POST   | `/clear`      | —                                            | blank the panel                                     |
+
+RGB888 was chosen over RGB565 specifically to avoid gradient banding: 565 only
+gives 32/64/32 levels per channel, which bands visibly on smooth album art
+(skies, fades). The panel's own PWM colour engine natively drives 8 bits per
+channel (`drawPixelRGB888`), so sending full precision from the host avoids
+the banding at the source instead of dithering around it.
 
 ## Auto-brightness
 

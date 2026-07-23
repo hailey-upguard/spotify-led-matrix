@@ -3,7 +3,7 @@
 // Responsibilities (deliberately minimal):
 //   * Join WiFi, advertise over mDNS.
 //   * Serve a tiny HTTP API:
-//       POST /frame      body = PANEL_WIDTH*PANEL_HEIGHT*2 bytes, RGB565 big-endian
+//       POST /frame      body = PANEL_WIDTH*PANEL_HEIGHT*3 bytes, RGB888 (r,g,b per pixel)
 //       POST /brightness body = a single ASCII integer 0-255
 //       POST /clear      blank the panel
 //       GET  /           status / health
@@ -23,7 +23,7 @@
 #include "config.h"
 
 static const size_t FRAME_PIXELS = (size_t)PANEL_WIDTH * PANEL_HEIGHT;
-static const size_t FRAME_BYTES  = FRAME_PIXELS * 2;  // RGB565
+static const size_t FRAME_BYTES  = FRAME_PIXELS * 3;  // RGB888
 
 MatrixPanel_I2S_DMA *display = nullptr;
 AsyncWebServer server(80);
@@ -49,9 +49,10 @@ static void drawFrame() {
   size_t i = 0;
   for (int y = 0; y < PANEL_HEIGHT; y++) {
     for (int x = 0; x < PANEL_WIDTH; x++) {
-      uint16_t color = (frameBuf[i] << 8) | frameBuf[i + 1];  // big-endian RGB565
-      display->drawPixel(x, y, color);  // library treats uint16 as RGB565
-      i += 2;
+      // Full 8-bit-per-channel, no RGB565 rounding: this is what actually
+      // fixes gradient banding, vs. dithering a pre-truncated 565 value.
+      display->drawPixelRGB888(x, y, frameBuf[i], frameBuf[i + 1], frameBuf[i + 2]);
+      i += 3;
     }
   }
   framesDrawn++;
@@ -65,6 +66,9 @@ static void setupDisplay() {
 
   HUB75_I2S_CFG cfg(PANEL_WIDTH, PANEL_HEIGHT, PANEL_CHAIN, pins);
   cfg.clkphase = false;  // flip to true if every pixel looks shifted by one column
+  // Library default is 2; its own docs note anything >1 causes artefacts on
+  // ICS-driver panels, which shows up as noise/ghosting in dark regions.
+  cfg.latch_blanking = 1;
 
   display = new MatrixPanel_I2S_DMA(cfg);
   display->begin();
@@ -152,7 +156,7 @@ static void setupServer() {
     req->send(200, "text/plain", body);
   });
 
-  // POST /frame: raw RGB565 body. Async bodies arrive in chunks, so we assemble
+  // POST /frame: raw RGB888 body. Async bodies arrive in chunks, so we assemble
   // by offset and only mark ready once the whole frame has landed.
   server.on(
       "/frame", HTTP_POST,

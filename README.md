@@ -11,13 +11,13 @@ I used [this](https://www.aliexpress.com/item/1005012414579321.html) panel and e
 
 ```
 Spotify Web API ──poll──► host pod (Python, k8s) ──HTTP POST 64x64 frame──► ESP32 ──HUB75──► panel
-                          • OAuth + token refresh          (RGB565, 8 KB)    • renders frame
+                          • OAuth + token refresh          (RGB888, 12 KB)   • renders frame
                           • download album art                               • nothing else
-                          • resize 64x64 + pack RGB565
+                          • resize 64x64 + pack RGB888
 ```
 
 The **ESP32 firmware is deliberately dumb**: it joins WiFi and renders any 64x64
-RGB565 frame POSTed to `/frame`. All Spotify logic, image downloading, and
+RGB888 frame POSTed to `/frame`. All Spotify logic, image downloading, and
 resizing happen in the **host pod**, so you never reflash to change behaviour.
 This also means no PSRAM is needed on the ESP32 (your board doesn't have it).
 

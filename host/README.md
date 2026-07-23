@@ -1,7 +1,7 @@
 # Host — Spotify → panel bridge
 
 Polls Spotify for your currently playing track, downloads the album art, resizes
-it to 64×64, packs it as RGB565, and POSTs it to the panel firmware. Runs as a
+it to 64×64, packs it as RGB888, and POSTs it to the panel firmware. Runs as a
 single-replica k8s pod.
 
 ## 1. Create a Spotify app
