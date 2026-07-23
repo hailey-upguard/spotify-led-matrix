@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spotify-matrix
+  namespace: default
+  labels:
+    app: spotify-matrix
+spec:
+  replicas: 1
+  # Only one writer should drive the panel at a time.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: spotify-matrix
+  template:
+    metadata:
+      labels:
+        app: spotify-matrix
+    spec:
+      containers:
+        - name: spotify-matrix
+          # Build + push this image, then set the ref here.
+          image: REGISTRY/spotify-matrix:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: spotify-matrix
+          env:
+            # The ESP32 lives on your LAN. Give it a static DHCP lease and put
+            # that IP here; mDNS (ledmatrix.local) generally won't resolve from
+            # inside the cluster network.
+            - name: PANEL_HOST
+              value: "192.168.1.42"
+            - name: POLL_INTERVAL
+              value: "4"
+            - name: ART_BRIGHTNESS
+              value: "1.0"
+            - name: POWER_LIMIT
+              value: "0.5"
+            - name: IDLE_TIMEOUT
+              value: "1800"
+            - name: LOG_LEVEL
+              value: "INFO"
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
