@@ -35,6 +35,14 @@ static uint8_t  frameBuf[FRAME_BYTES];
 static volatile bool frameReady = false;
 static uint32_t framesDrawn = 0;
 
+// Onboard LDR auto-brightness. POSTing a numeric value to /brightness switches
+// to manual and holds it there until /brightness gets "auto" again or the
+// panel reboots.
+static bool     autoBrightness = true;
+static int      ldrSmoothed = 0;
+static uint32_t lastLdrRead = 0;
+static uint8_t  currentBrightness = DEFAULT_BRIGHTNESS;
+
 // ---------------------------------------------------------------------------
 
 static void drawFrame() {
@@ -64,12 +72,43 @@ static void setupDisplay() {
   display->clearScreen();
 }
 
-// A simple boot splash so you can tell the panel is alive before WiFi connects.
+static void setupLdr() {
+  analogSetAttenuation(ADC_11db);  // full 0-3.3V range
+  pinMode(LDR_PIN, INPUT);
+  ldrSmoothed = analogRead(LDR_PIN);  // seed so the first reading isn't a jump from 0
+}
+
+// Called on a timer from loop(). Smooths the raw LDR reading (it's noisy) and,
+// when in auto mode, maps ambient light linearly onto [LDR_BRIGHT_MIN, MAX_BRIGHTNESS].
+static void updateAutoBrightness() {
+  int raw = analogRead(LDR_PIN);
+  ldrSmoothed = (ldrSmoothed * 7 + raw) / 8;  // exponential smoothing, avoids flicker
+  if (!autoBrightness) return;
+  int clamped = constrain(ldrSmoothed, LDR_RAW_MIN, LDR_RAW_MAX);
+  currentBrightness = map(clamped, LDR_RAW_MIN, LDR_RAW_MAX, LDR_BRIGHT_MIN, MAX_BRIGHTNESS);
+  display->setBrightness8(currentBrightness);
+}
+
+// A simple text splash, used only for the WiFi-failure error state.
 static void splash(const char *msg, uint16_t color) {
   display->clearScreen();
   display->setTextColor(color);
   display->setCursor(2, 2);
   display->print(msg);
+}
+
+// A soft white glow so you can tell the panel is alive before WiFi connects.
+// Layered filled circles, largest/dimmest first, fake a radial glow since GFX
+// has no alpha blending.
+static void bootIcon() {
+  display->clearScreen();
+  static const struct { uint8_t radius, level; } rings[] = {
+      {16, 25}, {12, 60}, {8, 120}, {4, 255},
+  };
+  for (const auto &ring : rings) {
+    display->fillCircle(PANEL_WIDTH / 2, PANEL_HEIGHT / 2, ring.radius,
+                         display->color565(ring.level, ring.level, ring.level));
+  }
 }
 
 static void setupWifi() {
@@ -103,11 +142,13 @@ static void setupWifi() {
 
 static void setupServer() {
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
-    char body[160];
+    char body[220];
     snprintf(body, sizeof(body),
-             "ledmatrix ok\nip=%s\nframes=%lu\nexpect_bytes=%u\n",
+             "ledmatrix ok\nip=%s\nframes=%lu\nexpect_bytes=%u\n"
+             "brightness=%u (%s)\nldr_raw=%d\n",
              WiFi.localIP().toString().c_str(),
-             (unsigned long)framesDrawn, (unsigned)FRAME_BYTES);
+             (unsigned long)framesDrawn, (unsigned)FRAME_BYTES,
+             currentBrightness, autoBrightness ? "auto" : "manual", ldrSmoothed);
     req->send(200, "text/plain", body);
   });
 
@@ -142,8 +183,13 @@ static void setupServer() {
         char buf[8] = {0};
         size_t n = total < sizeof(buf) - 1 ? total : sizeof(buf) - 1;
         memcpy(buf, data, n);
-        int v = constrain(atoi(buf), 0, MAX_BRIGHTNESS);  // never exceed ceiling
-        display->setBrightness8(v);
+        if (strcmp(buf, "auto") == 0) {
+          autoBrightness = true;
+          return;
+        }
+        autoBrightness = false;
+        currentBrightness = constrain(atoi(buf), 0, MAX_BRIGHTNESS);  // never exceed ceiling
+        display->setBrightness8(currentBrightness);
       });
 
   server.on("/clear", HTTP_POST, [](AsyncWebServerRequest *req) {
@@ -179,10 +225,11 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   setupDisplay();
-  splash("boot", display->color565(0, 80, 255));
+  setupLdr();
+  bootIcon();
   setupWifi();
   setupOTA();
-  splash("ready", display->color565(0, 200, 0));
+  display->clearScreen();  // ready: blank until the host pushes a frame
   setupServer();
 }
 
@@ -191,6 +238,11 @@ void loop() {
   if (frameReady) {
     frameReady = false;
     drawFrame();
+  }
+  uint32_t now = millis();
+  if (now - lastLdrRead >= LDR_READ_INTERVAL) {
+    lastLdrRead = now;
+    updateAutoBrightness();
   }
   delay(2);
 }

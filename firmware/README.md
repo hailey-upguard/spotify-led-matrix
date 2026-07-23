@@ -5,12 +5,23 @@ renders 64x64 RGB565 frames POSTed to it. No Spotify logic lives here.
 
 ## HTTP API
 
-| Method | Path          | Body                                  | Effect               |
-| ------ | ------------- | ------------------------------------- | -------------------- |
-| GET    | `/`           | —                                     | status / health text |
-| POST   | `/frame`      | 8192 bytes, RGB565 big-endian (64×64) | draw the frame       |
-| POST   | `/brightness` | ASCII integer `0`–`255`               | set panel brightness |
-| POST   | `/clear`      | —                                     | blank the panel      |
+| Method | Path          | Body                                  | Effect                                              |
+| ------ | ------------- | ------------------------------------- | --------------------------------------------------- |
+| GET    | `/`           | —                                     | status / health text                                |
+| POST   | `/frame`      | 8192 bytes, RGB565 big-endian (64×64) | draw the frame                                      |
+| POST   | `/brightness` | ASCII integer `0`–`255`, or `auto`    | set panel brightness (manual), or return to the LDR |
+| POST   | `/clear`      | —                                     | blank the panel                                     |
+
+## Auto-brightness
+
+The board has an onboard LDR on **GPIO 35** (confirmed from the OEM ClockWise
+Plus firmware, same board). The firmware reads it every `LDR_READ_INTERVAL`
+ms, smooths it, and maps ambient light onto `[LDR_BRIGHT_MIN, MAX_BRIGHTNESS]`.
+This is on by default, no host changes needed. `GET /` reports the current
+`brightness`/mode and raw `ldr_raw` reading, which is what you want to watch
+while tuning `LDR_RAW_MIN`/`LDR_RAW_MAX` in `config.h` to your room's darkest
+and brightest conditions. POSTing a numeric value to `/brightness` switches to
+manual and holds it there until you POST `auto` again or reboot the panel.
 
 ## Flashing hardware
 

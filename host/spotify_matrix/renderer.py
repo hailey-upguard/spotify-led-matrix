@@ -43,6 +43,26 @@ def power_scale(img: Image.Image, power_limit: float) -> float:
     return power_limit / avg_duty
 
 
+_R_LEVELS = 31  # 5-bit channel
+_G_LEVELS = 63  # 6-bit channel
+_B_LEVELS = 31  # 5-bit channel
+
+
+def _quantize(value: float, levels: int) -> tuple[int, float]:
+    """Round `value` (0..255) to the nearest of `levels`+1 steps; return (level, its 0..255 value)."""
+    step = 255.0 / levels
+    level = max(0, min(levels, round(value / step)))
+    return level, level * step
+
+
+def _diffuse(err: list[float], next_err: list[float], x: int, e: float) -> None:
+    """Floyd-Steinberg: push quantization error `e` onto the neighbors of pixel `x`."""
+    err[x + 2] += e * 7 / 16
+    next_err[x] += e * 3 / 16
+    next_err[x + 1] += e * 5 / 16
+    next_err[x + 2] += e * 1 / 16
+
+
 def to_frame(
     img: Image.Image, brightness: float = 1.0, power_limit: float = 1.0
 ) -> bytes:
@@ -52,24 +72,47 @@ def to_frame(
     "pixelated" look. `brightness` (0..1) is a flat pre-scale. `power_limit`
     (0..1) additionally dims only frames that would exceed the current budget,
     so a bright cover gets pulled down but a dark one is left alone.
+
+    RGB565 only has 32/64/32 levels per channel, so naive rounding bands
+    visibly on smooth gradients (album art skies, fades). Floyd-Steinberg
+    error diffusion pushes each pixel's rounding error onto its neighbors,
+    turning hard bands into fine dither noise the eye blends smooth.
     """
     img = img.resize((WIDTH, HEIGHT), Image.LANCZOS)
     brightness = brightness * power_scale(img, power_limit)
     px = img.load()
 
+    err_r, err_g, err_b = [0.0] * (WIDTH + 2), [0.0] * (WIDTH + 2), [0.0] * (WIDTH + 2)
+
     out = bytearray(FRAME_BYTES)
     i = 0
     for y in range(HEIGHT):
+        next_err_r = [0.0] * (WIDTH + 2)
+        next_err_g = [0.0] * (WIDTH + 2)
+        next_err_b = [0.0] * (WIDTH + 2)
         for x in range(WIDTH):
             r, g, b = px[x, y]
             if brightness != 1.0:
-                r = int(r * brightness)
-                g = int(g * brightness)
-                b = int(b * brightness)
-            rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+                r *= brightness
+                g *= brightness
+                b *= brightness
+            r += err_r[x + 1]
+            g += err_g[x + 1]
+            b += err_b[x + 1]
+
+            r_level, r_used = _quantize(r, _R_LEVELS)
+            g_level, g_used = _quantize(g, _G_LEVELS)
+            b_level, b_used = _quantize(b, _B_LEVELS)
+
+            _diffuse(err_r, next_err_r, x, r - r_used)
+            _diffuse(err_g, next_err_g, x, g - g_used)
+            _diffuse(err_b, next_err_b, x, b - b_used)
+
+            rgb565 = (r_level << 11) | (g_level << 5) | b_level
             out[i] = (rgb565 >> 8) & 0xFF  # big-endian, matches firmware
             out[i + 1] = rgb565 & 0xFF
             i += 2
+        err_r, err_g, err_b = next_err_r, next_err_g, next_err_b
     return bytes(out)
 
 

@@ -50,3 +50,15 @@
 // linearly; the host additionally caps per-frame current via POWER_LIMIT.
 #define MAX_BRIGHTNESS     153  // 0.60 * 255
 #define DEFAULT_BRIGHTNESS MAX_BRIGHTNESS
+
+// ---- Auto-brightness (onboard LDR) -------------------------------------------
+// GPIO 35 (analog-only pin), confirmed from the OEM ClockWise Plus firmware
+// (same board). Raw ADC in [LDR_RAW_MIN, LDR_RAW_MAX] maps linearly to a
+// brightness in [LDR_BRIGHT_MIN, MAX_BRIGHTNESS]. Watch `ldr_raw` at
+// http://<ip>/ in your darkest and brightest room conditions and tune the raw
+// range to match; the defaults below are a reasonable starting point.
+#define LDR_PIN          35
+#define LDR_READ_INTERVAL 500  // ms between readings
+#define LDR_BRIGHT_MIN   10    // brightness floor in a dark room
+#define LDR_RAW_MIN      30    // LDR ADC reading in darkness
+#define LDR_RAW_MAX      2000  // LDR ADC reading in a bright room

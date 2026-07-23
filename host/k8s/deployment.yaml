@@ -35,9 +35,9 @@ spec:
             - name: POLL_INTERVAL
               value: "4"
             - name: ART_BRIGHTNESS
-              value: "1.0"
+              value: "0.8"
             - name: POWER_LIMIT
-              value: "0.5"
+              value: "0.4"
             - name: IDLE_TIMEOUT
               value: "1800"
             - name: LOG_LEVEL

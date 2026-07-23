@@ -41,10 +41,16 @@ class App:
         self.power_limit = float(_env("POWER_LIMIT", "0.5"))
         # How long to keep the last cover up after music stops, before blanking.
         self.idle_timeout = float(_env("IDLE_TIMEOUT", "1800"))  # 30 min
+        # The panel has no memory of what it was showing before it lost power, so
+        # resend the current frame at this cadence even when nothing changed. Bounds
+        # how long a panel that got power-cycled mid-song sits on its boot splash.
+        self.repaint_interval = float(_env("REPAINT_INTERVAL", "60"))
 
-        # State so we only redraw when something actually changes.
+        # State so we only re-render (not just re-send) when something changes.
         self._last_track_id = None
         self._last_blanked = False
+        self._last_sent_frame = None  # cached bytes, so repaints skip refetch/render
+        self._last_send_ts = None  # monotonic time of the last frame actually sent
         # monotonic timestamp of the last poll that saw music playing; None means
         # nothing has played since this process started.
         self._last_play_ts = None
@@ -54,31 +60,54 @@ class App:
         log.info("shutting down")
         self._running = False
 
-    def _blank(self):
-        if not self._last_blanked:
-            try:
-                self.panel.send_frame(renderer.black_frame())
-                self._last_blanked = True
-                self._last_track_id = None
-                log.info("panel blanked")
-            except Exception as e:  # noqa: BLE001
-                log.warning("failed to blank panel: %s", e)
+    def _due_for_repaint(self, now):
+        return self._last_send_ts is None or now - self._last_send_ts >= self.repaint_interval
 
-    def _show_track(self, np):
-        if np.track_id == self._last_track_id and not self._last_blanked:
-            return  # already on screen
-        if not np.art_url:
-            log.info("track '%s' has no art; blanking", np.title)
-            self._blank()
+    def _repaint(self, now):
+        """Resend whatever should already be on screen, e.g. after a panel reboot."""
+        frame = self._last_sent_frame if self._last_sent_frame is not None else renderer.black_frame()
+        try:
+            self.panel.send_frame(frame)
+            self._last_send_ts = now
+        except Exception as e:  # noqa: BLE001
+            log.warning("failed to repaint panel: %s", e)
+
+    def _blank(self, now):
+        was_blanked = self._last_blanked
+        if was_blanked and not self._due_for_repaint(now):
             return
         try:
-            frame = renderer.frame_from_url(
+            self.panel.send_frame(renderer.black_frame())
+            self._last_blanked = True
+            self._last_track_id = None
+            self._last_sent_frame = None
+            self._last_send_ts = now
+            if not was_blanked:
+                log.info("panel blanked")
+        except Exception as e:  # noqa: BLE001
+            log.warning("failed to blank panel: %s", e)
+
+    def _show_track(self, np, now):
+        same_track = np.track_id == self._last_track_id and not self._last_blanked
+        if same_track and not self._due_for_repaint(now):
+            return  # already on screen, no repaint due
+        if not np.art_url:
+            log.info("track '%s' has no art; blanking", np.title)
+            self._blank(now)
+            return
+        try:
+            # Repaint of an unchanged track: resend the cached frame instead of
+            # refetching art and re-rendering it.
+            frame = self._last_sent_frame if same_track else renderer.frame_from_url(
                 np.art_url, brightness=self.brightness, power_limit=self.power_limit
             )
             self.panel.send_frame(frame)
             self._last_track_id = np.track_id
             self._last_blanked = False
-            log.info("now showing: %s - %s", np.artist, np.title)
+            self._last_sent_frame = frame
+            self._last_send_ts = now
+            if not same_track:
+                log.info("now showing: %s - %s", np.artist, np.title)
         except Exception as e:  # noqa: BLE001
             log.warning("failed to render/send '%s': %s", np.title, e)
 
@@ -94,18 +123,21 @@ class App:
         # Music playing: show the cover and reset the idle clock.
         if np is not None and np.is_playing:
             self._last_play_ts = now
-            self._show_track(np)
+            self._show_track(np, now)
             return
 
         # Nothing playing. If we've never seen music this session, blank.
         if self._last_play_ts is None:
-            self._blank()
+            self._blank(now)
             return
 
         # Music stopped: keep the last cover up until the idle timeout, then blank.
         if now - self._last_play_ts >= self.idle_timeout:
-            self._blank()
-        # else: within the grace window, leave the last cover on screen.
+            self._blank(now)
+        elif self._due_for_repaint(now):
+            # Within the grace window: leave the last cover up, but resend it
+            # periodically in case the panel itself got power-cycled meanwhile.
+            self._repaint(now)
 
     def run(self):
         signal.signal(signal.SIGTERM, self.stop)
