@@ -3,6 +3,10 @@
 Drives an ESP32 + 64x64 HUB75 RGB LED panel to show pixelated album art of
 whatever you're currently playing on Spotify.
 
+## Hardware
+
+I used [this](https://www.aliexpress.com/item/1005012414579321.html) panel and esp32 combo because it had a usb-serial adapter built in which is required to flash firmware.
+
 ## Architecture
 
 ```
