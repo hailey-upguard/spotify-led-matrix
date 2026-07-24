@@ -20,8 +20,10 @@ spec:
     spec:
       containers:
         - name: spotify-matrix
-          # Build + push this image, then set the ref here.
-          image: REGISTRY/spotify-matrix:latest
+          # Built and pushed by .github/workflows/docker-publish.yml on every
+          # push to main. Pin to a commit-sha tag instead of :latest if you
+          # want deploys to be explicit rather than following main.
+          image: ghcr.io/hailey-upguard/spotify-matrix:latest
           imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
