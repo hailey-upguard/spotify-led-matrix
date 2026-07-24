@@ -6,7 +6,7 @@ import logging
 from io import BytesIO
 
 import requests
-from PIL import Image, ImageStat
+from PIL import Image, ImageFilter, ImageStat
 
 log = logging.getLogger(__name__)
 
@@ -61,8 +61,40 @@ def to_frame(
     especially in dark/near-black regions. Tried it twice (on RGB565, then
     again as a lighter pass here) and both times it made dark areas look
     worse, not smoother. Plain rounding avoids that outright.
+
+    A source-res blur pass runs before the resize instead, sized to the
+    downscale ratio. Album art (especially photographic covers) often has
+    fine grain or small bright highlights that LANCZOS has no proper
+    anti-alias prefilter for at large downscale ratios (source images can be
+    10x+ larger than 64px); that grain folds into blocky patches on smooth
+    gradients and speckle in dark regions on its own, with no dithering
+    involved. Blurring first removes the noise before it gets sampled,
+    rather than adding noise after quantization like dithering does, so it
+    doesn't bring back the speckle problem above.
+
+    A second, much smaller blur runs after the resize, at 64x64. This is a
+    separate problem from the pre-blur: even with clean source noise, a
+    smooth gradient sampled down to only 64 cells still steps from one flat
+    LED color to the next with a hard edge between them. A ~0.2px blur here
+    blends each cell into its neighbors, enough to take the hard edge off
+    without softening logos/text; 0.4-1px were tried first and read as too
+    soft on those.
+
+    A median filter runs before all of that, on the source image. It
+    targets a different kind of noise than the Gaussian blur above: isolated
+    outlier pixels (JPEG block artefacts, sensor grain) rather than smooth
+    gradients. This matters most on flat, near-black covers (e.g. a plain
+    black background with a small logo), where a Gaussian blur alone smears
+    each outlier into a soft, faint blob spread across several output
+    cells instead of removing it; the median filter drops outliers before
+    the blur has anything to smear.
     """
+    scale = max(img.width / WIDTH, img.height / HEIGHT)
+    img = img.filter(ImageFilter.MedianFilter(size=3))
+    if scale > 1:
+        img = img.filter(ImageFilter.GaussianBlur(radius=scale / 4))
     img = img.resize((WIDTH, HEIGHT), Image.LANCZOS)
+    img = img.filter(ImageFilter.GaussianBlur(radius=0.2))
     brightness = brightness * power_scale(img, power_limit)
     px = img.load()
 
