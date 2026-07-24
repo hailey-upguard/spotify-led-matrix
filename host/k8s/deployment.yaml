@@ -23,7 +23,7 @@ spec:
           # Built and pushed by .github/workflows/docker-publish.yml on every
           # push to main. Pin to a commit-sha tag instead of :latest if you
           # want deploys to be explicit rather than following main.
-          image: ghcr.io/hailey-upguard/spotify-matrix:latest
+          image: ghcr.io/hailey-upguard/spotify-led-matrix:latest
           imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
