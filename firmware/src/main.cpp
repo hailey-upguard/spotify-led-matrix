@@ -93,6 +93,17 @@ static void updateAutoBrightness() {
   display->setBrightness8(currentBrightness);
 }
 
+// Shared by both the raw-body and urlencoded-param paths for POST /brightness.
+static void applyBrightnessCommand(const char *buf) {
+  if (strcmp(buf, "auto") == 0) {
+    autoBrightness = true;
+    return;
+  }
+  autoBrightness = false;
+  currentBrightness = constrain(atoi(buf), 0, MAX_BRIGHTNESS);  // never exceed ceiling
+  display->setBrightness8(currentBrightness);
+}
+
 // A simple text splash, used only for the WiFi-failure error state.
 static void splash(const char *msg, uint16_t color) {
   display->clearScreen();
@@ -180,20 +191,23 @@ static void setupServer() {
 
   server.on(
       "/brightness", HTTP_POST,
-      [](AsyncWebServerRequest *req) { req->send(200, "text/plain", "ok"); },
+      [](AsyncWebServerRequest *req) {
+        // A body sent as application/x-www-form-urlencoded (curl -d's default,
+        // with no "=" in it) never reaches onBody below: ESPAsyncWebServer
+        // parses it as a single valueless POST param instead, named after the
+        // raw text. Handle that case here so plain `curl -d auto` works too.
+        if (req->params() == 1 && req->getParam(0)->isPost()) {
+          applyBrightnessCommand(req->getParam(0)->name().c_str());
+        }
+        req->send(200, "text/plain", "ok");
+      },
       nullptr,
       [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index,
          size_t total) {
         char buf[8] = {0};
         size_t n = total < sizeof(buf) - 1 ? total : sizeof(buf) - 1;
         memcpy(buf, data, n);
-        if (strcmp(buf, "auto") == 0) {
-          autoBrightness = true;
-          return;
-        }
-        autoBrightness = false;
-        currentBrightness = constrain(atoi(buf), 0, MAX_BRIGHTNESS);  // never exceed ceiling
-        display->setBrightness8(currentBrightness);
+        applyBrightnessCommand(buf);
       });
 
   server.on("/clear", HTTP_POST, [](AsyncWebServerRequest *req) {
