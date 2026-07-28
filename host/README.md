@@ -69,25 +69,40 @@ README's notes on LAN reachability and NetworkPolicies).
 
 ## Configuration (env vars)
 
-| Var                     | Default | Meaning                                           |
-| ----------------------- | ------- | ------------------------------------------------- |
-| `SPOTIFY_CLIENT_ID`     | (req)   | required                                          |
-| `SPOTIFY_CLIENT_SECRET` | (req)   | required                                          |
-| `SPOTIFY_REFRESH_TOKEN` | (req)   | required (from `auth_bootstrap.py`)               |
-| `PANEL_HOST`            | (req)   | required; panel IP/host, no scheme                |
-| `POLL_INTERVAL`         | `4`     | seconds between Spotify polls                     |
-| `ART_BRIGHTNESS`        | `1.0`   | 0-1 flat pre-scale on art                         |
-| `POWER_LIMIT`           | `0.5`   | 0-1 max avg current; dims bright frames (USB-C)   |
-| `IDLE_TIMEOUT`          | `1800`  | seconds to hold last cover after stop, then blank |
-| `LOG_LEVEL`             | `INFO`  | logging level                                     |
+| Var                       | Default | Meaning                                                                                                                                                                                   |
+| ------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SPOTIFY_CLIENT_ID`       | (req)   | required                                                                                                                                                                                  |
+| `SPOTIFY_CLIENT_SECRET`   | (req)   | required                                                                                                                                                                                  |
+| `SPOTIFY_REFRESH_TOKEN`   | (req)   | required (from `auth_bootstrap.py`)                                                                                                                                                       |
+| `PANEL_HOST`              | (req)   | required; panel IP/host, no scheme                                                                                                                                                        |
+| `POLL_INTERVAL`           | `4`     | seconds between Spotify polls                                                                                                                                                             |
+| `ART_BRIGHTNESS`          | `1.0`   | 0-1 flat pre-scale on art                                                                                                                                                                 |
+| `POWER_LIMIT`             | `0.5`   | 0-1 max avg current; dims bright frames (USB-C)                                                                                                                                           |
+| `IDLE_TIMEOUT`            | `1800`  | seconds to hold last cover after stop, then blank                                                                                                                                         |
+| `REPAINT_INTERVAL`        | `60`    | seconds between resending the current frame, so a panel that gets power-cycled doesn't sit blank                                                                                          |
+| `TIMEZONE`                | `UTC`   | IANA name (e.g. `Australia/Melbourne`); must be set correctly for `SCHEDULE` to line up with your actual evenings                                                                         |
+| `SCHEDULE`                | (unset) | quiet-hours windows, comma-separated `<day>-<day>=HH:MM-HH:MM:mode` entries (mode is `off` or `dim`), e.g. `sun-thu=23:30-08:45:off, fri-sat=23:30-09:30:dim`; unset disables it entirely |
+| `SCHEDULE_DIM_BRIGHTNESS` | `60`    | brightness (0-255, capped by the firmware's `MAX_BRIGHTNESS`) used for `dim`-mode windows                                                                                                 |
+| `LOG_LEVEL`               | `INFO`  | logging level                                                                                                                                                                             |
 
 ## How it behaves
 
 - **Playing:** shows the current album cover; only redraws on track change.
-- **Stopped/paused:** keeps the last cover on screen for `IDLE_TIMEOUT` seconds
-  (30 min by default), then blanks to zero light.
+- **Stopped/paused:** keeps the last cover on screen for `IDLE_TIMEOUT` seconds,
+  then blanks to zero light (see the table above for the default; the
+  deployment in `k8s/deployment.yaml` overrides it to 10 min).
 - **Idle past the timeout, or nothing played yet this session:** blank panel
   (an all-off frame, so no light).
 - Track with no art blanks rather than showing a stale cover.
 - Handles Spotify token expiry/rotation and transient API errors without dying.
+- **Scheduled quiet hours:** `SCHEDULE` is any number of
+  `<day>-<day>=HH:MM-HH:MM:mode` entries (`mode` is `off` or `dim`), day ranges
+  are arbitrary (`wed-fri`, `sat-mon`, a single day like `wed`, ...) and keyed
+  by the weekday the evening _starts_ on, so an overnight window like
+  `23:30-08:45` keeps applying past midnight. This overrides whatever Spotify
+  is doing: `off` blanks the panel and skips polling entirely; `dim` pins the
+  panel to `SCHEDULE_DIM_BRIGHTNESS` (overriding the onboard LDR
+  auto-brightness) but otherwise shows album art as normal. Auto-brightness
+  resumes automatically once the window ends. Entries are matched in the order
+  given, so avoid overlapping day/time ranges.
 - Works for podcast episodes too (uses the show/episode art).

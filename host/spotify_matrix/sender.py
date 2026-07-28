@@ -31,5 +31,10 @@ class PanelSender:
             f"{self._base}/brightness", data=str(value), timeout=self._timeout
         )
 
+    def set_auto_brightness(self) -> None:
+        self._session.post(
+            f"{self._base}/brightness", data="auto", timeout=self._timeout
+        )
+
     def clear(self) -> None:
         self._session.post(f"{self._base}/clear", timeout=self._timeout)

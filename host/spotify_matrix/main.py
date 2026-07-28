@@ -11,12 +11,18 @@ import os
 import signal
 import sys
 import time
+from datetime import datetime, time as dtime, timedelta
+from zoneinfo import ZoneInfo
 
 from . import renderer
 from .sender import PanelSender
 from .spotify import SpotifyClient
 
 log = logging.getLogger("spotify_matrix")
+
+# datetime.weekday(): Monday=0 ... Sunday=6.
+_DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+_DAY_INDEX = {name: i for i, name in enumerate(_DAY_NAMES)}
 
 
 def _env(name: str, default=None, required=False):
@@ -25,6 +31,72 @@ def _env(name: str, default=None, required=False):
         log.error("missing required env var %s", name)
         sys.exit(2)
     return val
+
+
+def _parse_days(spec: str) -> frozenset:
+    """'wed-fri' -> {wed,thu,fri}; 'sat-mon' -> {sat,sun,mon} (wraps); 'wed' -> {wed}."""
+    parts = spec.split("-")
+    if len(parts) not in (1, 2):
+        raise ValueError(f"bad day range {spec!r}")
+    try:
+        indices = [_DAY_INDEX[p] for p in parts]
+    except KeyError as e:
+        raise ValueError(f"unknown day name {e.args[0]!r} in {spec!r}") from None
+    start, end = indices[0], indices[-1]
+    days = set()
+    i = start
+    while True:
+        days.add(i)
+        if i == end:
+            break
+        i = (i + 1) % 7
+    return frozenset(days)
+
+
+def _parse_window(spec: str) -> tuple[dtime, dtime, str]:
+    """Parse 'HH:MM-HH:MM:mode' (mode is 'off' or 'dim') into (start, end, mode)."""
+    window, mode = spec.rsplit(":", 1)
+    if mode not in ("off", "dim"):
+        raise ValueError(f"mode must be 'off' or 'dim', got {mode!r}")
+    start_str, end_str = window.split("-")
+    return dtime.fromisoformat(start_str), dtime.fromisoformat(end_str), mode
+
+
+def _parse_schedule(spec: str) -> list:
+    """Parse 'wed-fri=18:30-04:30:off, sun-thu=23:30-08:45:off' into a list of
+    (days, start, end, mode) entries, matched in order given."""
+    entries = []
+    for chunk in spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        day_spec, _, window_spec = chunk.partition("=")
+        days = _parse_days(day_spec.strip())
+        start_t, end_t, mode = _parse_window(window_spec.strip())
+        entries.append((days, start_t, end_t, mode))
+    return entries
+
+
+def _schedule_mode(now: datetime, entries: list) -> str | None:
+    """Which schedule mode (if any) applies at `now`.
+
+    Each entry is keyed by the weekday(s) the evening *starts* on (so a "Thu
+    night" entry running past midnight still applies into Friday morning), so
+    this checks both entries starting today and entries starting yesterday, in
+    case they cross midnight. Returns the first matching entry, in the order
+    given; overlapping entries are the caller's responsibility to avoid.
+    """
+    for days_ago in (0, 1):
+        start_date = now.date() - timedelta(days=days_ago)
+        for days, start_t, end_t, mode in entries:
+            if start_date.weekday() not in days:
+                continue
+            start_dt = datetime.combine(start_date, start_t, tzinfo=now.tzinfo)
+            end_date = start_date + timedelta(days=1) if end_t <= start_t else start_date
+            end_dt = datetime.combine(end_date, end_t, tzinfo=now.tzinfo)
+            if start_dt <= now < end_dt:
+                return mode
+    return None
 
 
 class App:
@@ -46,6 +118,18 @@ class App:
         # how long a panel that got power-cycled mid-song sits on its boot splash.
         self.repaint_interval = float(_env("REPAINT_INTERVAL", "60"))
 
+        # Quiet-hours schedule, e.g. "sun-thu=23:30-08:45:off, fri-sat=23:30-09:30:dim".
+        # Any number of "<day>-<day>=HH:MM-HH:MM:mode" entries, comma-separated;
+        # day ranges are arbitrary (e.g. "wed-fri") and keyed by the weekday the
+        # evening *starts* on, so "Thursday night" running past midnight is still
+        # a Thursday entry. TIMEZONE must be set correctly (the pod's system
+        # clock is normally UTC) or these windows won't line up with your actual
+        # evenings.
+        self.timezone = ZoneInfo(_env("TIMEZONE", "UTC"))
+        self.schedule_windows = self._parse_schedule_env("SCHEDULE")
+        self.schedule_dim_brightness = int(_env("SCHEDULE_DIM_BRIGHTNESS", "60"))
+        self._schedule_mode = None  # currently applied: None / "off" / "dim"
+
         # State so we only re-render (not just re-send) when something changes.
         self._last_track_id = None
         self._last_blanked = False
@@ -59,6 +143,33 @@ class App:
     def stop(self, *_):
         log.info("shutting down")
         self._running = False
+
+    def _parse_schedule_env(self, name):
+        spec = _env(name, "")
+        if not spec:
+            return []
+        try:
+            return _parse_schedule(spec)
+        except ValueError as e:
+            log.error("invalid %s=%r: %s", name, spec, e)
+            sys.exit(2)
+
+    def _enter_schedule_mode(self, mode, now):
+        if mode == "off":
+            log.info("schedule: display off")
+            self._blank(now)
+        elif mode == "dim":
+            log.info("schedule: ultra-dim (brightness=%d)", self.schedule_dim_brightness)
+            try:
+                self.panel.set_brightness(self.schedule_dim_brightness)
+            except Exception as e:  # noqa: BLE001
+                log.warning("failed to set scheduled dim brightness: %s", e)
+        else:
+            log.info("schedule: normal operation resumed")
+            try:
+                self.panel.set_auto_brightness()
+            except Exception as e:  # noqa: BLE001
+                log.warning("failed to restore auto brightness: %s", e)
 
     def _due_for_repaint(self, now):
         return self._last_send_ts is None or now - self._last_send_ts >= self.repaint_interval
@@ -112,13 +223,25 @@ class App:
             log.warning("failed to render/send '%s': %s", np.title, e)
 
     def tick(self):
+        now = time.monotonic()
+
+        mode = _schedule_mode(datetime.now(self.timezone), self.schedule_windows)
+        if mode != self._schedule_mode:
+            self._enter_schedule_mode(mode, now)
+            self._schedule_mode = mode
+        if mode == "off":
+            # Scheduled off overrides everything; don't poll Spotify or render
+            # at all, just periodically re-assert blank in case the panel
+            # itself got power-cycled during the quiet hours.
+            if self._due_for_repaint(now):
+                self._repaint(now)
+            return
+
         try:
             np = self.spotify.now_playing()
         except Exception as e:  # noqa: BLE001
             log.warning("spotify poll failed: %s", e)
             return
-
-        now = time.monotonic()
 
         # Music playing: show the cover and reset the idle clock.
         if np is not None and np.is_playing:
