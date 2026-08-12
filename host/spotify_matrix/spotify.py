@@ -131,19 +131,16 @@ class SpotifyClient:
 
     @staticmethod
     def _best_art(images: list) -> Optional[str]:
-        """Pick the smallest image that is still >= 64px, else the largest.
+        """Returns the URL of the largest image Spotify offers.
 
-        Downloading a giant 640px jpeg only to crush it to 64x64 is wasteful, and
-        the smallest Spotify image (usually 64px) is the perfect source.
+        Not the smallest-over-64px it used to pick: at 64x64 the renderer's resize
+        is a no-op, so the thumbnail's jpeg ringing reached the LEDs 1:1. Downscaling
+        from 640px averages ~100 source pixels per panel pixel and suppresses it,
+        for one ~60KB fetch per track change.
         """
         if not images:
             return None
         sized = [im for im in images if im.get("width")]
         if not sized:
             return images[0].get("url")
-        big_enough = sorted(
-            (im for im in sized if im["width"] >= 64), key=lambda im: im["width"]
-        )
-        if big_enough:
-            return big_enough[0]["url"]
         return max(sized, key=lambda im: im["width"])["url"]

@@ -38,6 +38,12 @@ spec:
               value: "4"
             - name: ART_BRIGHTNESS
               value: "0.8"
+            # Downscale filter. LANCZOS rings on high-contrast edges and lights
+            # up pixels the source has as pure black; BOX is a plain area average
+            # with the cleanest blacks but slightly softer strokes.
+            # One of LANCZOS / BICUBIC / BILINEAR / HAMMING / BOX.
+            - name: RESAMPLE
+              value: "BICUBIC"
             - name: POWER_LIMIT
               value: "0.4"
             - name: IDLE_TIMEOUT

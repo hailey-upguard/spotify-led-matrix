@@ -5,12 +5,64 @@ renders 64x64 RGB888 frames POSTed to it. No Spotify logic lives here.
 
 ## HTTP API
 
-| Method | Path          | Body                                         | Effect                                              |
-| ------ | ------------- | -------------------------------------------- | --------------------------------------------------- |
-| GET    | `/`           | —                                            | status / health text                                |
-| POST   | `/frame`      | 12288 bytes, RGB888 (r,g,b per pixel, 64×64) | draw the frame                                      |
-| POST   | `/brightness` | ASCII integer `0`–`255`, or `auto`           | set panel brightness (manual), or return to the LDR |
-| POST   | `/clear`      | —                                            | blank the panel                                     |
+| Method | Path          | Body                                            | Effect                                            |
+| ------ | ------------- | ----------------------------------------------- | ------------------------------------------------- |
+| GET    | `/`           | —                                               | status / health text                              |
+| POST   | `/frame`      | 12288 bytes, RGB888 (r,g,b per pixel, 64×64)    | draw the frame                                    |
+| POST   | `/brightness` | ASCII integer `0`–`255`, or `auto`              | ramp to that brightness; `auto` = back to default |
+| POST   | `/clear`      | —                                               | blank the panel                                   |
+| POST   | `/panel`      | query params, see [Panel timing](#panel-timing) | HUB75 timing + fade, persisted in NVS             |
+
+## Panel timing
+
+Ghosting (pixels lit that should be off, and blacks reading green) is a HUB75
+timing problem, and the right values are a property of the **panel**, not the
+board — so they do not survive a hardware swap. Tunable at runtime, persisted in
+NVS, and reported by `GET /`:
+
+```bash
+P=http://ledmatrix.local
+curl -X POST "$P/panel?latblk=3"    # latch blanking 1-4, applies live
+curl -X POST "$P/panel?clk=0"       # clock phase, reboots (~4s)
+curl -X POST "$P/panel?drv=2"       # shift driver, reboots
+curl -X POST "$P/panel?depth=8"     # colour depth 2-12, reboots
+curl -X POST "$P/panel?power=102"   # avg duty ceiling 0-255, live
+curl -X POST "$P/panel?fadems=220"  # cover fade, per direction
+curl -X POST "$P/panel?wifitest=20" # preview the no-wifi glyph for N seconds
+curl -X POST "$P/panel?reset=1"     # drop NVS, back to config.h
+```
+
+Settle on values here, then copy them into `config.h` so a fresh flash keeps
+them. What the current panel needed:
+
+- **`latch_blanking = 2`** (library minimum is 1, which is what the old board
+  used). At 1 this panel ghosted badly and never reached a true black. This was
+  the whole fix.
+- **`clkphase = false`**, even though the library defaults to `true`. With `true`
+  the image shifts one pixel right and column 0 wraps to the far edge.
+- **`drv = 0`** (plain shift register). If a future panel ghosts and no
+  `latblk` value cleans it up, try `drv=2` — FM6126A/ICN2038S chips need an init
+  sequence, and without it they ghost and never black out properly.
+
+## Cover transitions
+
+A new cover fades down to black and back up rather than cutting, `FADE_MS` per
+direction. This is in the firmware, not the host, because a host-side fade would
+mean streaming a dozen interpolated 12KB frames per transition over WiFi — the
+same link that is already too marginal to finish an OTA. Ramping the panel's own
+brightness costs no bandwidth at all.
+
+Two details worth knowing:
+
+- Frames are hashed (FNV-1a) and an incoming frame identical to what is already
+  displayed skips the transition. The host re-pushes the current cover on
+  reconnect and after a panel reboot, and fading out and back into the same image
+  reads as a glitch.
+- `frames` in `GET /` only increments at the _bottom_ of the fade, since that is
+  when the swap happens. Polling right after a POST can race it.
+
+The fade multiplier and the brightness target are composed in one place
+(`applyBrightness`), so a scheduled dim landing mid-transition cannot fight it.
 
 RGB888 was chosen over RGB565 specifically to avoid gradient banding: 565 only
 gives 32/64/32 levels per channel, which bands visibly on smooth album art
@@ -18,69 +70,72 @@ gives 32/64/32 levels per channel, which bands visibly on smooth album art
 channel (`drawPixelRGB888`), so sending full precision from the host avoids
 the banding at the source instead of dithering around it.
 
-## Auto-brightness
+## Brightness
 
-The board has an onboard LDR on **GPIO 35** (confirmed from the OEM ClockWise
-Plus firmware, same board). The firmware reads it every `LDR_READ_INTERVAL`
-ms, smooths it, and maps ambient light onto `[LDR_BRIGHT_MIN, MAX_BRIGHTNESS]`.
-This is on by default, no host changes needed. `GET /` reports the current
-`brightness`/mode and raw `ldr_raw` reading, which is what you want to watch
-while tuning `LDR_RAW_MIN`/`LDR_RAW_MAX` in `config.h` to your room's darkest
-and brightest conditions. POSTing a numeric value to `/brightness` switches to
-manual and holds it there until you POST `auto` again or reboot the panel.
+There is **no auto-brightness**, because the MatrixPortal S3 has no ambient
+light sensor. The panel boots at `DEFAULT_BRIGHTNESS` and only changes when
+something POSTs `/brightness`.
+
+Day/night dimming lives in the host instead, which already does it on a schedule
+(`SCHEDULE_DIM_BRIGHTNESS` + quiet hours). `auto` is kept as an accepted body
+value meaning "back to `DEFAULT_BRIGHTNESS`", since that is how the host undoes a
+scheduled dim.
+
+Changes ramp rather than snap: each tick moves `1/BRIGHTNESS_RAMP_DIV` of the
+remaining distance, so a scheduled dim fades in instead of stepping. `GET /`
+reports `brightness` (where the panel is now), `brightness_target` (where it is
+heading), and `brightness_max`.
+
+> Worth knowing if you port this back to an ESP32 with a real sensor: Adafruit's
+> arduino-esp32 variant header for this board defines `PIN_LIGHTSENSOR A5`
+> (GPIO 5), but nothing is connected to it. Reading it returns a floating ADC pin
+> that drifts over roughly 112–390 regardless of room light, which mapped onto
+> brightness looks exactly like a hypersensitive, jumpy auto-brightness stuck at
+> the dim end. CircuitPython's board definition for this board lists no light
+> sensor and no A5, which is the reliable signal.
 
 ## Flashing hardware
 
-This board has a **bare ESP32 and no USB-serial chip** (the USB-C is power-only).
-Flash via the unpopulated 4-pin UART header (`3V3 / RX / TX / GND`) with a
-USB-to-TTL adapter (CP2102/CH340) **set to 3.3V logic**. Wire it up:
-
-```
-adapter GND  -> header GND
-adapter TXD  -> header RX     (crossover)
-adapter RXD  -> header TX     (crossover)
-adapter DTR  -> BOOT pad (IO0)   # for auto-reset (recommended)
-adapter RTS  -> RST  pad (EN)    # for auto-reset (recommended)
-```
-
-Power the board from its **own USB-C**; leave the adapter's 3V3/5V pin off, and
-share grounds (the GND wire does this). With DTR/RTS wired, `pio run -t upload`
-auto-enters the bootloader. Without them, hold BOOT->GND, tap RST->GND, release
-BOOT, then upload (and uncomment the manual-reset `upload_flags` in
-`platformio.ini`).
-
-**No soldering iron?** Solid-core wire (e.g. a single conductor from a Cat5
-cable) press-fits into the plated header holes: strip ~10mm, push it in, and bend
-it so it wedges against the hole wall. Wrap the other end around the adapter's
-pins. It's flaky but fine for one flash, just hold it steady. For the bootloader,
-pin one wire to GND and momentarily touch its tip to the BOOT then RST pads. You
-only have to survive this **once** (see OTA below).
-
-Back up the original clock firmware first, so this is reversible:
+The board is an **Adafruit MatrixPortal ESP32-S3**. The S3 has a USB-Serial/JTAG
+peripheral built into the silicon, so the USB-C port is all you need: no TTL
+adapter, no wires, no soldering.
 
 ```bash
-pip install esptool
-esptool.py --port /dev/cu.usbserial-XXXX read_flash 0 0x400000 clock_backup.bin
+pio run -e esp32-matrix -t upload
 ```
 
-## OTA: only flash over wires once
+esptool drives EN/IO0 over the USB control lines and enters the bootloader by
+itself.
 
-The firmware runs an OTA service. After the first wired flash succeeds and the
-panel is on WiFi, every later update (including all the pinout tuning below) goes
-over the air, no wires:
+> **Do NOT hold the BOOT button.** Holding BOOT (GPIO0 low) at power-on forces
+> the ROM into _download mode_, and download mode never starts your application.
+> The flash still writes and still verifies, so this fails silently and looks
+> exactly like broken firmware: no serial output, no WiFi, a dark panel. If you
+> suspect it, `esptool.py --before no_reset --no-stub flash_id` answering
+> "Staying in bootloader" straight after a hard reset confirms it. The fix is a
+> plain power-cycle (or a tap of RESET) with BOOT untouched.
+>
+> The older instructions here described a BOOT->GND / RST->GND dance. That was
+> for the previous all-in-one ClockWise Plus board, which had a bare ESP32 and no
+> USB-serial chip. It does not apply to this board and will actively break it.
 
-```bash
-pio run -e esp32-matrix-ota -t upload
-```
+## No OTA
 
-It targets `ledmatrix.local`. If mDNS doesn't resolve on your machine, set
-`upload_port` to the panel's IP in the `esp32-matrix-ota` env in `platformio.ini`.
+There is deliberately no over-the-air update path. There was one (`ArduinoOTA`
+plus an `espota` env), and it was removed: it would die partway through an upload
+and then stop answering on port 3232 until the panel was rebooted, so every flash
+ended up going over USB anyway. The likely cause was `ArduinoOTA.handle()`
+competing with the async web server and `drawFrame()` in `loop()` while the host
+kept pushing 12KB frames, made worse by marginal WiFi.
+
+USB flashing is ~10 seconds and needs no button presses on this board, so OTA was
+carrying risk without buying much. Anything that genuinely needs changing at
+runtime is exposed over HTTP instead — see [Panel timing](#panel-timing).
 
 ## Build & flash
 
 Install [PlatformIO](https://platformio.org/install) (`pip install platformio`
-or the VS Code extension), set `upload_port` in `platformio.ini` to your
-adapter's port (`ls /dev/cu.*`), then:
+or the VS Code extension), plug in the USB-C cable, then:
 
 ```bash
 cd firmware
@@ -94,20 +149,22 @@ On boot the panel shows `boot` then `ready`. Note the IP from the serial monitor
 
 ## Fixing a wrong pinout
 
-The pins in `config.h` come from the **original ClockWise Plus firmware that
-shipped on this board** (`yuan910715/clockwise`): library defaults, plus
-`E_PIN = 18`, plus the **RBG green/blue swap** this panel needs (confirmed). So
-the color bars from `python ../host/send_test.py <ip>` should be correct on the
-first flash.
+The pins in `config.h` are Adafruit's **fixed HUB75 socket wiring** for the
+MatrixPortal ESP32-S3, taken from their own `MTX_*` board definitions, so they are
+not a guess and should not need changing. The color bars from
+`python ../host/send_test.py <ip>` should be correct on the first flash.
 
-If something is still off:
+If something is off, it is a property of the panel you plugged in, not the board:
 
-- **Blue and green swapped** → revert to standard RGB: `B1_PIN 27`, `G1_PIN 26`,
-  `B2_PIN 13`, `G2_PIN 12`.
-- **Image split/scrambled** → check `E_PIN` (should be 18).
-- **Every pixel shifted one column** → set `cfg.clkphase = true;` in `main.cpp`.
+- **Green and blue swapped** → your panel is RBG rather than RGB. Swap `G1_PIN`
+  with `B1_PIN` (41 ↔ 40) and `G2_PIN` with `B2_PIN` (39 ↔ 37).
+- **Image split or duplicated top/bottom** → check `E_PIN` (21). A 64x64 is 1/32
+  scan and needs the E address line.
+- **Every pixel shifted one column** → `PANEL_CLKPHASE`, see
+  [Panel timing](#panel-timing). It must be `false` on the current panel.
+- **Pixels lit that should be dark** → `PANEL_LATCH_BLANKING`, same section.
 
-Re-test over OTA, no wires needed.
+Re-flash over USB, about 10 seconds.
 
 ## Library
 

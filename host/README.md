@@ -76,8 +76,9 @@ README's notes on LAN reachability and NetworkPolicies).
 | `SPOTIFY_REFRESH_TOKEN`   | (req)   | required (from `auth_bootstrap.py`)                                                                                                                                                       |
 | `PANEL_HOST`              | (req)   | required; panel IP/host, no scheme                                                                                                                                                        |
 | `POLL_INTERVAL`           | `4`     | seconds between Spotify polls                                                                                                                                                             |
-| `ART_BRIGHTNESS`          | `1.0`   | 0-1 flat pre-scale on art                                                                                                                                                                 |
-| `POWER_LIMIT`             | `0.5`   | 0-1 max avg current; dims bright frames (USB-C)                                                                                                                                           |
+| `ART_BRIGHTNESS`          | `1.0`   | **ignored** - dimming moved to the panel; warns if set                                                                                                                                                                 |
+| `POWER_LIMIT`             | `1.0`   | **ignored** - see `PANEL_POWER_LIMIT` in firmware config.h
+| `RESAMPLE`                | `BICUBIC` | downscale filter: `LANCZOS` / `BICUBIC` / `BILINEAR` / `HAMMING` / `BOX`. LANCZOS rings on high-contrast edges and lights pixels the source has as pure black; `BOX` gives the cleanest blacks but slightly softer strokes                                                                                                                                           |
 | `IDLE_TIMEOUT`            | `1800`  | seconds to hold last cover after stop, then blank                                                                                                                                         |
 | `REPAINT_INTERVAL`        | `60`    | seconds between resending the current frame, so a panel that gets power-cycled doesn't sit blank                                                                                          |
 | `TIMEZONE`                | `UTC`   | IANA name (e.g. `Australia/Melbourne`); must be set correctly for `SCHEDULE` to line up with your actual evenings                                                                         |
@@ -101,8 +102,9 @@ README's notes on LAN reachability and NetworkPolicies).
   by the weekday the evening _starts_ on, so an overnight window like
   `23:30-08:45` keeps applying past midnight. This overrides whatever Spotify
   is doing: `off` blanks the panel and skips polling entirely; `dim` pins the
-  panel to `SCHEDULE_DIM_BRIGHTNESS` (overriding the onboard LDR
-  auto-brightness) but otherwise shows album art as normal. Auto-brightness
-  resumes automatically once the window ends. Entries are matched in the order
+  panel to `SCHEDULE_DIM_BRIGHTNESS` but otherwise shows album art as normal.
+  Normal brightness resumes automatically once the window ends. The panel has no
+  light sensor, so this schedule is the only thing that dims it; the firmware
+  ramps between levels, so the transition fades. Entries are matched in the order
   given, so avoid overlapping day/time ranges.
 - Works for podcast episodes too (uses the show/episode art).

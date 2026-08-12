@@ -108,9 +108,25 @@ class App:
         )
         self.panel = PanelSender(_env("PANEL_HOST", required=True))
         self.poll_interval = float(_env("POLL_INTERVAL", "4"))
+        # Dimming and current limiting both moved to the panel, which scales OE duty
+        # instead of pixel values and so keeps all 256 levels. Kept only to warn.
         self.brightness = float(_env("ART_BRIGHTNESS", "1.0"))
-        # Caps average panel current so USB-C power can't brown out on bright art.
-        self.power_limit = float(_env("POWER_LIMIT", "0.5"))
+        if self.brightness != 1.0:
+            log.warning(
+                "ART_BRIGHTNESS=%s ignored: set brightness on the panel instead "
+                "(DEFAULT_BRIGHTNESS in firmware config.h, or POST /brightness)",
+                self.brightness,
+            )
+            self.brightness = 1.0
+        self.resample = renderer.resolve_resample(_env("RESAMPLE", "BICUBIC"))
+        self.power_limit = float(_env("POWER_LIMIT", "1.0"))
+        if self.power_limit != 1.0:
+            log.warning(
+                "POWER_LIMIT=%s ignored: the panel enforces its own limit now "
+                "(PANEL_POWER_LIMIT in firmware config.h, or POST /panel?power=N)",
+                self.power_limit,
+            )
+            self.power_limit = 1.0
         # How long to keep the last cover up after music stops, before blanking.
         self.idle_timeout = float(_env("IDLE_TIMEOUT", "1800"))  # 30 min
         # The panel has no memory of what it was showing before it lost power, so
@@ -210,7 +226,7 @@ class App:
             # Repaint of an unchanged track: resend the cached frame instead of
             # refetching art and re-rendering it.
             frame = self._last_sent_frame if same_track else renderer.frame_from_url(
-                np.art_url, brightness=self.brightness, power_limit=self.power_limit
+                np.art_url, resample=self.resample
             )
             self.panel.send_frame(frame)
             self._last_track_id = np.track_id

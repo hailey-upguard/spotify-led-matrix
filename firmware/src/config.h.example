@@ -5,60 +5,71 @@
 #define WIFI_SSID     "your-wifi-ssid"
 #define WIFI_PASSWORD "your-wifi-password"
 
-// mDNS hostname. The panel will be reachable at http://LEDMATRIX_HOSTNAME.local
-// on networks where mDNS works. From a k8s pod, mDNS usually will NOT resolve,
-// so give the ESP32 a static DHCP lease and point the host at its IP instead.
+// mDNS will not resolve from inside a k8s pod; give the panel a static DHCP lease
+// and point the host at its IP.
 #define LEDMATRIX_HOSTNAME "ledmatrix"
-
-// Optional: protect OTA updates with a password. Uncomment to enable, and pass
-// the same value via upload_flags in the OTA env (see platformio.ini).
-// #define OTA_PASSWORD "change-me"
 
 // ---- Panel geometry ---------------------------------------------------------
 #define PANEL_WIDTH  64
 #define PANEL_HEIGHT 64
-#define PANEL_CHAIN  1   // number of panels daisy-chained (1 for a single 64x64)
+#define PANEL_CHAIN  1
 
 // ---- HUB75 pinout -----------------------------------------------------------
-// These values are taken from the ORIGINAL ClockWise Plus firmware that shipped
-// on this exact board (yuan910715/clockwise), so they are correct for it: all
-// library defaults except E = GPIO 18.
-//
-// This board is RBG (confirmed), so the G and B pins are swapped vs the library
-// default: B1=26/G1=27 and B2=12/G2=13. (The OEM firmware does the same via its
-// swapBlueGreen toggle.) If colors ever look off, the default RGB ordering is
-// B1=27/G1=26 and B2=13/G2=12.
-#define R1_PIN 25
-#define G1_PIN 27
-#define B1_PIN 26
-#define R2_PIN 14
-#define G2_PIN 13
-#define B2_PIN 12
-#define A_PIN  23
-#define B_PIN  19
-#define C_PIN  5
-#define D_PIN  17
-#define E_PIN  18   // GPIO 18 on this board (confirmed from the OEM firmware).
-#define LAT_PIN 4
-#define OE_PIN  15
-#define CLK_PIN 16
+// Hard-wired on the MatrixPortal ESP32-S3; these are Adafruit's own MTX_* values,
+// not a guess. If colours come out permuted that is the panel's channel order, so
+// swap G/B here (e.g. G1<->B1 and G2<->B2 for an RBG panel).
+#define R1_PIN 42
+#define G1_PIN 41
+#define B1_PIN 40
+#define R2_PIN 38
+#define G2_PIN 39
+#define B2_PIN 37
+#define A_PIN  45
+#define B_PIN  36
+#define C_PIN  48
+#define D_PIN  35
+#define E_PIN  21
+#define LAT_PIN 47
+#define OE_PIN  14
+#define CLK_PIN 2
 
-// ---- Display ----------------------------------------------------------------
-// MAX_BRIGHTNESS is a hard ceiling the panel will never exceed (the /brightness
-// endpoint is clamped to it too). Set to 60% for a living-room-friendly glow.
-// This also helps the USB-C power budget, since brightness scales current
-// linearly; the host additionally caps per-frame current via POWER_LIMIT.
-#define MAX_BRIGHTNESS     153  // 0.60 * 255
+// ---- HUB75 timing -----------------------------------------------------------
+// Panel properties, not board properties: they do not survive a panel swap. All
+// tunable at runtime via POST /panel, which persists to NVS and overrides these.
+// See firmware/README.md for what each one does and how these were arrived at.
+//
+// driver 0 = plain shift register. latch_blanking 2 is what stopped this panel
+// ghosting. clkphase false despite the library defaulting to true, otherwise the
+// image shifts a pixel right and column 0 wraps to the far edge.
+#define PANEL_DRIVER         0
+#define PANEL_CLKPHASE       false
+#define PANEL_LATCH_BLANKING 2
+
+// Bits per channel in the panel's BCM planes, 2-12. Higher resolves more of the
+// 256 input levels (8/10/12 give 174/236/256) but is visibly dimmer on this panel,
+// and the brightness matters more here than the extra levels.
+#define PANEL_COLOR_DEPTH    8
+
+// Pixel clock, 8/16/20 MHz. Buys refresh headroom, not brightness.
+#define PANEL_I2S_MHZ        8
+
+// ---- Brightness -------------------------------------------------------------
+// Full range is safe as a ceiling because PANEL_POWER_LIMIT, not this, is what
+// protects the supply.
+#define MAX_BRIGHTNESS     255
 #define DEFAULT_BRIGHTNESS MAX_BRIGHTNESS
 
-// ---- Auto-brightness (onboard LDR) -------------------------------------------
-// GPIO 35 (analog-only pin), confirmed from the OEM ClockWise Plus firmware
-// (same board). Raw ADC in [LDR_RAW_MIN, LDR_RAW_MAX] maps linearly to a
-// brightness in [LDR_BRIGHT_MIN, MAX_BRIGHTNESS]. Watch `ldr_raw` at
-// http://<ip>/ in your darkest and brightest room conditions and tune the raw
-// range to match; the defaults below are a reasonable starting point.
-#define LDR_PIN          35
-#define LDR_READ_INTERVAL 500  // ms between readings
-#define LDR_BRIGHT_MIN   10    // brightness floor in a dark room
-#define LDR_RAW_MIN      30    // LDR ADC reading in darkness
-#define LDR_RAW_MAX      2000  // LDR ADC reading in a bright room
+// Ceiling on average output duty, 0-255 (0 disables). Enforced by the panel from
+// the frame it was handed, which bounds mean-pixel-value x brightness -- the thing
+// current actually follows. The host cannot do that, having only seen the pixels.
+#define PANEL_POWER_LIMIT  102
+
+// Brightness changes ramp instead of snapping: each tick closes 1/RAMP_DIV of the
+// remaining gap, so scheduled dims fade rather than step.
+#define BRIGHTNESS_STEP_INTERVAL 25
+#define BRIGHTNESS_RAMP_DIV      12
+
+// ---- Album art transitions --------------------------------------------------
+// FADE_MS is per direction, so a cover swap takes roughly twice this.
+#define FADE_MS            220
+#define FADE_STEP_INTERVAL 12
