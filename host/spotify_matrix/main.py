@@ -14,7 +14,7 @@ import time
 from datetime import datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 
-from . import renderer
+from . import health, renderer
 from .sender import PanelSender
 from .spotify import SpotifyClient
 
@@ -100,7 +100,8 @@ def _schedule_mode(now: datetime, entries: list) -> str | None:
 
 
 class App:
-    def __init__(self):
+    def __init__(self, health_state: health.HealthState | None = None):
+        self.health = health_state or health.HealthState()
         self.spotify = SpotifyClient(
             client_id=_env("SPOTIFY_CLIENT_ID", required=True),
             client_secret=_env("SPOTIFY_CLIENT_SECRET", required=True),
@@ -155,6 +156,11 @@ class App:
         # nothing has played since this process started.
         self._last_play_ts = None
         self._running = True
+
+        # Wedged = several poll intervals with no tick at all. The Spotify and
+        # panel calls each have their own 5-10s timeout, so allow generous room
+        # above the interval before calling the loop dead.
+        self.health.configure(max(6 * self.poll_interval, 60.0))
 
     def stop(self, *_):
         log.info("shutting down")
@@ -284,6 +290,9 @@ class App:
         log.info("started; polling every %ss", self.poll_interval)
         while self._running:
             self.tick()
+            # Ready as soon as the first poll completes, however it went: a
+            # Spotify or panel outage is logged and retried, not unready.
+            self.health.tick()
             # Sleep in small steps so SIGTERM is responsive.
             slept = 0.0
             while self._running and slept < self.poll_interval:
@@ -296,7 +305,11 @@ def main():
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    App().run()
+    # Start the probe endpoint before App(), so a pod stuck on a slow first
+    # Spotify token exchange still answers probes instead of looking dead.
+    state = health.HealthState()
+    health.start(state, int(os.environ.get("HEALTH_PORT", health.DEFAULT_PORT)))
+    App(state).run()
 
 
 if __name__ == "__main__":

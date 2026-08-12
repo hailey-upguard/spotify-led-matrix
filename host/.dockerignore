@@ -1,0 +1,7 @@
+# The build only needs requirements.txt and spotify_matrix/. Everything else is
+# context we'd upload to the daemon for nothing (.venv alone is ~24MB).
+*
+!requirements.txt
+!spotify_matrix/
+**/__pycache__/
+**/*.pyc

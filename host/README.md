@@ -69,22 +69,38 @@ README's notes on LAN reachability and NetworkPolicies).
 
 ## Configuration (env vars)
 
-| Var                       | Default | Meaning                                                                                                                                                                                   |
-| ------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SPOTIFY_CLIENT_ID`       | (req)   | required                                                                                                                                                                                  |
-| `SPOTIFY_CLIENT_SECRET`   | (req)   | required                                                                                                                                                                                  |
-| `SPOTIFY_REFRESH_TOKEN`   | (req)   | required (from `auth_bootstrap.py`)                                                                                                                                                       |
-| `PANEL_HOST`              | (req)   | required; panel IP/host, no scheme                                                                                                                                                        |
-| `POLL_INTERVAL`           | `4`     | seconds between Spotify polls                                                                                                                                                             |
-| `ART_BRIGHTNESS`          | `1.0`   | **ignored** - dimming moved to the panel; warns if set                                                                                                                                                                 |
-| `POWER_LIMIT`             | `1.0`   | **ignored** - see `PANEL_POWER_LIMIT` in firmware config.h
-| `RESAMPLE`                | `BICUBIC` | downscale filter: `LANCZOS` / `BICUBIC` / `BILINEAR` / `HAMMING` / `BOX`. LANCZOS rings on high-contrast edges and lights pixels the source has as pure black; `BOX` gives the cleanest blacks but slightly softer strokes                                                                                                                                           |
-| `IDLE_TIMEOUT`            | `1800`  | seconds to hold last cover after stop, then blank                                                                                                                                         |
-| `REPAINT_INTERVAL`        | `60`    | seconds between resending the current frame, so a panel that gets power-cycled doesn't sit blank                                                                                          |
-| `TIMEZONE`                | `UTC`   | IANA name (e.g. `Australia/Melbourne`); must be set correctly for `SCHEDULE` to line up with your actual evenings                                                                         |
-| `SCHEDULE`                | (unset) | quiet-hours windows, comma-separated `<day>-<day>=HH:MM-HH:MM:mode` entries (mode is `off` or `dim`), e.g. `sun-thu=23:30-08:45:off, fri-sat=23:30-09:30:dim`; unset disables it entirely |
-| `SCHEDULE_DIM_BRIGHTNESS` | `60`    | brightness (0-255, capped by the firmware's `MAX_BRIGHTNESS`) used for `dim`-mode windows                                                                                                 |
-| `LOG_LEVEL`               | `INFO`  | logging level                                                                                                                                                                             |
+| Var                       | Default   | Meaning                                                                                                                                                                                                                    |
+| ------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SPOTIFY_CLIENT_ID`       | (req)     | required                                                                                                                                                                                                                   |
+| `SPOTIFY_CLIENT_SECRET`   | (req)     | required                                                                                                                                                                                                                   |
+| `SPOTIFY_REFRESH_TOKEN`   | (req)     | required (from `auth_bootstrap.py`)                                                                                                                                                                                        |
+| `PANEL_HOST`              | (req)     | required; panel IP/host, no scheme                                                                                                                                                                                         |
+| `POLL_INTERVAL`           | `4`       | seconds between Spotify polls                                                                                                                                                                                              |
+| `ART_BRIGHTNESS`          | `1.0`     | **ignored** - dimming moved to the panel; warns if set                                                                                                                                                                     |
+| `POWER_LIMIT`             | `1.0`     | **ignored** - see `PANEL_POWER_LIMIT` in firmware config.h                                                                                                                                                                 |
+| `RESAMPLE`                | `BICUBIC` | downscale filter: `LANCZOS` / `BICUBIC` / `BILINEAR` / `HAMMING` / `BOX`. LANCZOS rings on high-contrast edges and lights pixels the source has as pure black; `BOX` gives the cleanest blacks but slightly softer strokes |
+| `IDLE_TIMEOUT`            | `1800`    | seconds to hold last cover after stop, then blank                                                                                                                                                                          |
+| `REPAINT_INTERVAL`        | `60`      | seconds between resending the current frame, so a panel that gets power-cycled doesn't sit blank                                                                                                                           |
+| `TIMEZONE`                | `UTC`     | IANA name (e.g. `Australia/Melbourne`); must be set correctly for `SCHEDULE` to line up with your actual evenings                                                                                                          |
+| `SCHEDULE`                | (unset)   | quiet-hours windows, comma-separated `<day>-<day>=HH:MM-HH:MM:mode` entries (mode is `off` or `dim`), e.g. `sun-thu=23:30-08:45:off, fri-sat=23:30-09:30:dim`; unset disables it entirely                                  |
+| `SCHEDULE_DIM_BRIGHTNESS` | `60`      | brightness (0-255, capped by the firmware's `MAX_BRIGHTNESS`) used for `dim`-mode windows                                                                                                                                  |
+| `HEALTH_PORT`             | `8080`    | port for the `/healthz` and `/readyz` probe endpoints                                                                                                                                                                      |
+| `LOG_LEVEL`               | `INFO`    | logging level                                                                                                                                                                                                              |
+
+## Health endpoints
+
+The poll loop serves two probe endpoints (stdlib HTTP, no extra deps) so k8s can
+mark the pod ready as soon as the first poll lands rather than after a fixed
+delay:
+
+- `GET /readyz` - 200 once the first poll iteration has completed, 503 while
+  starting. Used by the startup and readiness probes.
+- `GET /healthz` - 200 while the loop is turning, 503 if no iteration has
+  completed in `max(6 * POLL_INTERVAL, 60)` seconds. Used by the liveness probe.
+
+Both return a small JSON body. A failed Spotify or panel call does **not** make
+the pod unready or trigger a restart: those are logged and retried, so only the
+loop actually seizing up trips a probe.
 
 ## How it behaves
 

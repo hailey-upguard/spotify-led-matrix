@@ -56,6 +56,29 @@ spec:
               value: "60"
             - name: LOG_LEVEL
               value: "INFO"
+          ports:
+            - name: health
+              containerPort: 8080
+          # Ready as soon as the first poll completes (usually a second or two),
+          # rather than after a fixed guess. Failing probes mean the loop has
+          # stopped turning; Spotify/panel outages are retried, not restarted.
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+            failureThreshold: 3
           resources:
             requests:
               cpu: "10m"
