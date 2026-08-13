@@ -54,9 +54,10 @@
 #define PANEL_I2S_MHZ        8
 
 // ---- Brightness -------------------------------------------------------------
-// Full range is safe as a ceiling because PANEL_POWER_LIMIT, not this, is what
-// protects the supply.
-#define MAX_BRIGHTNESS     255
+// Capped at ~63% of full range: the supply browns out above this on bright
+// frames, so the ceiling backs up PANEL_POWER_LIMIT rather than relying on it
+// alone.
+#define MAX_BRIGHTNESS     160
 #define DEFAULT_BRIGHTNESS MAX_BRIGHTNESS
 
 // Ceiling on average output duty, 0-255 (0 disables). Enforced by the panel from

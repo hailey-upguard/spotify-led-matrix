@@ -86,6 +86,11 @@ remaining distance, so a scheduled dim fades in instead of stepping. `GET /`
 reports `brightness` (where the panel is now), `brightness_target` (where it is
 heading), and `brightness_max`.
 
+`MAX_BRIGHTNESS` defaults to 160 (~63% of full range), not 255: the supply
+browns out above that on bright frames. Requests above the ceiling are clamped
+to it rather than rejected, so `GET /` is the place to check what actually took
+effect.
+
 > Worth knowing if you port this back to an ESP32 with a real sensor: Adafruit's
 > arduino-esp32 variant header for this board defines `PIN_LIGHTSENSOR A5`
 > (GPIO 5), but nothing is connected to it. Reading it returns a floating ADC pin
